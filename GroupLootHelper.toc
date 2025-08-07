@@ -1,8 +1,8 @@
 ## Interface: 110200
 ## Title: Group Loot Helper
-## Notes: Automatically announces tradeable loot drops and manages interest from group members
+## Notes: Automatically announces tradeable loot drops and manages interest from group members and guild members
 ## Author: YourName
-## Version: 1.1.0
+## Version: 1.2.0
 ## SavedVariables: GroupLootHelperDB
 
 GroupLootHelper.lua

@@ -1,5 +1,5 @@
 -- Group Loot Helper Addon for World of Warcraft
--- Version: 1.1.0
+-- Version: 1.2.0
 -- Compatible with WoW 11.2.0
 
 local ADDON_NAME = "GroupLootHelper"
@@ -11,6 +11,7 @@ GroupLootHelper:RegisterEvent("ADDON_LOADED")
 GroupLootHelper:RegisterEvent("CHAT_MSG_LOOT")
 GroupLootHelper:RegisterEvent("CHAT_MSG_ADDON")
 GroupLootHelper:RegisterEvent("GROUP_ROSTER_UPDATE")
+GroupLootHelper:RegisterEvent("GUILD_ROSTER_UPDATE")
 
 -- Saved variables
 GroupLootHelperDB = GroupLootHelperDB or {
@@ -19,6 +20,8 @@ GroupLootHelperDB = GroupLootHelperDB or {
         enabled = true,
         windowTimeout = 15,
         enableOpenWorld = true,
+        enableGuildSupport = true,
+        tradeableItemsOnly = true,
         minItemLevel = 620,
         instanceOnly = false
     }
@@ -28,6 +31,7 @@ GroupLootHelperDB = GroupLootHelperDB or {
 local activeInterestWindows = {}
 local pendingInterests = {}
 local isInValidInstance = false
+local guildMemberCache = {}
 
 -- Class armor and weapon compatibility tables
 local CLASS_ARMOR_TYPES = {
@@ -77,6 +81,54 @@ local function IsInGroup()
     return IsInGroup() or IsInRaid()
 end
 
+local function UpdateGuildMemberCache()
+    if not IsInGuild() then
+        guildMemberCache = {}
+        return
+    end
+    
+    local numMembers = GetNumGuildMembers()
+    guildMemberCache = {}
+    
+    for i = 1, numMembers do
+        local name, rank, rankIndex, level, class, zone, note, officernote, online = GetGuildRosterInfo(i)
+        if name and online then
+            -- Remove server name if present
+            local playerName = strsplit("-", name)
+            guildMemberCache[playerName] = {
+                rank = rank,
+                level = level,
+                class = class,
+                zone = zone
+            }
+        end
+    end
+end
+
+local function IsGuildMember(playerName)
+    if not GroupLootHelperDB.settings.enableGuildSupport then return false end
+    if not IsInGuild() then return false end
+    if not playerName then return false end
+    
+    -- Remove server name if present
+    local cleanName = strsplit("-", playerName)
+    return guildMemberCache[cleanName] ~= nil
+end
+
+local function IsInValidGroup()
+    -- Check if in traditional group/raid
+    if IsInGroup() then
+        return true
+    end
+    
+    -- If guild support is enabled and we're in open world, check for guild members nearby
+    if GroupLootHelperDB.settings.enableGuildSupport and GroupLootHelperDB.settings.enableOpenWorld then
+        return IsInGuild()
+    end
+    
+    return false
+end
+
 local function CanUseItem(itemLink)
     if not itemLink then return false end
     
@@ -120,6 +172,11 @@ end
 local function IsItemTradeable(itemLink)
     if not itemLink then return false end
     
+    -- If tradeable items only is disabled, allow all items that meet other criteria
+    if not GroupLootHelperDB.settings.tradeableItemsOnly then
+        return true
+    end
+    
     -- Create a temporary tooltip to check for soulbound status
     local tooltip = CreateFrame("GameTooltip", "GLHTooltip", nil, "GameTooltipTemplate")
     tooltip:SetOwner(UIParent, "ANCHOR_NONE")
@@ -161,14 +218,26 @@ end
 
 -- Communication functions
 local function SendAddonMessage(message, distribution)
-    if not IsInGroup() then return end
+    local messageSent = false
     
-    local channel = IsInRaid() and "RAID" or "PARTY"
-    C_ChatInfo.SendAddonMessage(ADDON_PREFIX, message, channel)
+    -- Try group/raid communication first
+    if IsInGroup() then
+        local channel = IsInRaid() and "RAID" or "PARTY"
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, message, channel)
+        messageSent = true
+    end
+    
+    -- If guild support is enabled and we're not in a group (or as fallback), try guild
+    if GroupLootHelperDB.settings.enableGuildSupport and IsInGuild() and (not IsInGroup() or distribution == "GUILD") then
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, message, "GUILD")
+        messageSent = true
+    end
+    
+    return messageSent
 end
 
 local function BroadcastLootDrop(itemLink)
-    if not itemLink or not IsInValidInstance() or not IsInGroup() then return end
+    if not itemLink or not IsInValidInstance() or not IsInValidGroup() then return end
     
     -- Check if item meets item level requirement
     if not MeetsItemLevelRequirement(itemLink) then
@@ -178,10 +247,15 @@ local function BroadcastLootDrop(itemLink)
     end
     
     local message = "LOOT:" .. itemLink
-    SendAddonMessage(message, "GROUP")
+    local messageSent = SendAddonMessage(message, "GROUP")
     
-    local itemLevel = GetDetailedItemLevelInfo(itemLink) or "?"
-    print("|cff00ff00[Group Loot Helper]|r Announced loot (iLvl " .. itemLevel .. "): " .. itemLink)
+    if messageSent then
+        local itemLevel = GetDetailedItemLevelInfo(itemLink) or "?"
+        local context = IsInGroup() and "group" or "guild"
+        print("|cff00ff00[Group Loot Helper]|r Announced loot to " .. context .. " (iLvl " .. itemLevel .. "): " .. itemLink)
+    else
+        print("|cffff9900[Group Loot Helper]|r Failed to announce loot - not in valid group or guild")
+    end
 end
 
 local function SendInterest(itemLink, senderName)
@@ -275,7 +349,7 @@ local function CreateSettingsGUI()
     end
     
     local frame = CreateFrame("Frame", "GLH_SettingsFrame", UIParent, "BasicFrameTemplateWithInset")
-    frame:SetSize(350, 250)
+    frame:SetSize(350, 320)
     frame:SetPoint("CENTER", UIParent, "CENTER")
     frame:SetFrameStrata("DIALOG")
     frame:SetToplevel(true)
@@ -305,10 +379,26 @@ local function CreateSettingsGUI()
     frame.instanceOnlyCheck.text = frame.instanceOnlyCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     frame.instanceOnlyCheck.text:SetPoint("LEFT", frame.instanceOnlyCheck, "RIGHT", 5, 0)
     frame.instanceOnlyCheck.text:SetText("Instance Only Mode")
+
+    -- Enable Guild Support checkbox
+    frame.guildSupportCheck = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+    frame.guildSupportCheck:SetPoint("TOPLEFT", frame.instanceOnlyCheck, "BOTTOMLEFT", 0, -10)
+    frame.guildSupportCheck:SetChecked(GroupLootHelperDB.settings.enableGuildSupport)
+    frame.guildSupportCheck.text = frame.guildSupportCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    frame.guildSupportCheck.text:SetPoint("LEFT", frame.guildSupportCheck, "RIGHT", 5, 0)
+    frame.guildSupportCheck.text:SetText("Enable Guild Support")
+
+    -- Tradeable Items Only checkbox
+    frame.tradeableItemsOnlyCheck = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+    frame.tradeableItemsOnlyCheck:SetPoint("TOPLEFT", frame.guildSupportCheck, "BOTTOMLEFT", 0, -10)
+    frame.tradeableItemsOnlyCheck:SetChecked(GroupLootHelperDB.settings.tradeableItemsOnly)
+    frame.tradeableItemsOnlyCheck.text = frame.tradeableItemsOnlyCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    frame.tradeableItemsOnlyCheck.text:SetPoint("LEFT", frame.tradeableItemsOnlyCheck, "RIGHT", 5, 0)
+    frame.tradeableItemsOnlyCheck.text:SetText("Tradeable Items Only")
     
     -- Min Item Level setting
     frame.itemLevelLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    frame.itemLevelLabel:SetPoint("TOPLEFT", frame.instanceOnlyCheck, "BOTTOMLEFT", 5, -20)
+    frame.itemLevelLabel:SetPoint("TOPLEFT", frame.tradeableItemsOnlyCheck, "BOTTOMLEFT", 5, -20)
     frame.itemLevelLabel:SetText("Minimum Item Level:")
     
     frame.itemLevelEditBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
@@ -337,6 +427,8 @@ local function CreateSettingsGUI()
         -- Save settings
         GroupLootHelperDB.settings.enableOpenWorld = frame.openWorldCheck:GetChecked()
         GroupLootHelperDB.settings.instanceOnly = frame.instanceOnlyCheck:GetChecked()
+        GroupLootHelperDB.settings.enableGuildSupport = frame.guildSupportCheck:GetChecked()
+        GroupLootHelperDB.settings.tradeableItemsOnly = frame.tradeableItemsOnlyCheck:GetChecked()
         
         local itemLevel = tonumber(frame.itemLevelEditBox:GetText())
         if itemLevel and itemLevel >= 0 then
@@ -454,11 +546,16 @@ local function OnAddonLoaded(self, event, addonName)
     -- Check initial instance status
     isInValidInstance = IsInValidInstance()
     
+    -- Initialize guild member cache if in guild
+    if IsInGuild() then
+        UpdateGuildMemberCache()
+    end
+    
     print("|cff00ff00[Group Loot Helper]|r Loaded successfully!")
 end
 
 local function OnChatMsgLoot(self, event, message)
-    if not isInValidInstance or not IsInGroup() then return end
+    if not isInValidInstance or not IsInValidGroup() then return end
     
     -- Parse loot message to extract item link
     -- Format: "Player receives loot: [Item Link]"
@@ -479,6 +576,16 @@ end
 local function OnChatMsgAddon(self, event, prefix, message, distribution, sender)
     if prefix ~= ADDON_PREFIX then return end
     if sender == UnitName("player") then return end -- Ignore own messages
+    
+    -- Validate sender is in group or guild
+    local isValidSender = false
+    if distribution == "PARTY" or distribution == "RAID" then
+        isValidSender = IsInGroup()
+    elseif distribution == "GUILD" then
+        isValidSender = IsGuildMember(sender)
+    end
+    
+    if not isValidSender then return end
     
     local command, data = string.match(message, "([^:]+):(.+)")
     if not command then return end
@@ -508,6 +615,10 @@ local function OnGroupRosterUpdate(self, event)
     isInValidInstance = IsInValidInstance()
 end
 
+local function OnGuildRosterUpdate(self, event)
+    UpdateGuildMemberCache()
+end
+
 -- Set event handlers
 GroupLootHelper:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -518,6 +629,8 @@ GroupLootHelper:SetScript("OnEvent", function(self, event, ...)
         OnChatMsgAddon(self, event, ...)
     elseif event == "GROUP_ROSTER_UPDATE" then
         OnGroupRosterUpdate(self, event, ...)
+    elseif event == "GUILD_ROSTER_UPDATE" then
+        OnGuildRosterUpdate(self, event, ...)
     end
 end)
 
@@ -578,11 +691,21 @@ SlashCmdList["GLH"] = function(msg)
         GroupLootHelperDB.settings.instanceOnly = not GroupLootHelperDB.settings.instanceOnly
         local status = GroupLootHelperDB.settings.instanceOnly and "enabled" or "disabled"
         print("|cff00ff00[Group Loot Helper]|r Instance only mode " .. status)
+    elseif command == "guildsupport" then
+        GroupLootHelperDB.settings.enableGuildSupport = not GroupLootHelperDB.settings.enableGuildSupport
+        local status = GroupLootHelperDB.settings.enableGuildSupport and "enabled" or "disabled"
+        print("|cff00ff00[Group Loot Helper]|r Guild support " .. status)
+    elseif command == "tradeableonly" then
+        GroupLootHelperDB.settings.tradeableItemsOnly = not GroupLootHelperDB.settings.tradeableItemsOnly
+        local status = GroupLootHelperDB.settings.tradeableItemsOnly and "enabled" or "disabled"
+        print("|cff00ff00[Group Loot Helper]|r Tradeable items only mode " .. status)
     elseif command == "status" then
         print("|cff00ff00[Group Loot Helper]|r Current Settings:")
         print("  Minimum Item Level: " .. GroupLootHelperDB.settings.minItemLevel)
         print("  Open World: " .. (GroupLootHelperDB.settings.enableOpenWorld and "Enabled" or "Disabled"))
         print("  Instance Only: " .. (GroupLootHelperDB.settings.instanceOnly and "Enabled" or "Disabled"))
+        print("  Guild Support: " .. (GroupLootHelperDB.settings.enableGuildSupport and "Enabled" or "Disabled"))
+        print("  Tradeable Items Only: " .. (GroupLootHelperDB.settings.tradeableItemsOnly and "Enabled" or "Disabled"))
         print("  Window Timeout: " .. GroupLootHelperDB.settings.windowTimeout .. " seconds")
         local inInstance, instanceType = IsInInstance()
         print("  Current Location: " .. (inInstance and instanceType or "Open World"))
@@ -595,6 +718,8 @@ SlashCmdList["GLH"] = function(msg)
         print("  /glh itemlevel [number] - Set/show minimum item level")
         print("  /glh openworld - Toggle open world mode")
         print("  /glh instanceonly - Toggle instance only mode")
+        print("  /glh guildsupport - Toggle guild support")
+        print("  /glh tradeableonly - Toggle tradeable items only mode")
         print("  /glh status - Show current settings and status")
         print("  /sendloot [itemID] - Test loot announcement")
     end
