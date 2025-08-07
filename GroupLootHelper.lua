@@ -1,5 +1,5 @@
 -- Group Loot Helper Addon for World of Warcraft
--- Version: 1.0.0
+-- Version: 1.1.0
 -- Compatible with WoW 11.2.0
 
 local ADDON_NAME = "GroupLootHelper"
@@ -17,7 +17,10 @@ GroupLootHelperDB = GroupLootHelperDB or {
     interests = {},
     settings = {
         enabled = true,
-        windowTimeout = 15
+        windowTimeout = 15,
+        enableOpenWorld = true,
+        minItemLevel = 620,
+        instanceOnly = false
     }
 }
 
@@ -55,6 +58,18 @@ local CLASS_WEAPON_RESTRICTIONS = {
 -- Utility functions
 local function IsInValidInstance()
     local inInstance, instanceType = IsInInstance()
+    
+    -- If instance only mode is enabled, require being in a dungeon/raid
+    if GroupLootHelperDB.settings.instanceOnly then
+        return inInstance and (instanceType == "party" or instanceType == "raid")
+    end
+    
+    -- If open world is enabled, allow both instances and open world
+    if GroupLootHelperDB.settings.enableOpenWorld then
+        return true -- Always valid if open world is enabled
+    end
+    
+    -- Default behavior: only dungeons/raids
     return inInstance and (instanceType == "party" or instanceType == "raid")
 end
 
@@ -127,6 +142,23 @@ local function IsItemTradeable(itemLink)
     return true
 end
 
+local function MeetsItemLevelRequirement(itemLink)
+    if not itemLink then return false end
+    
+    local itemLevel = GetDetailedItemLevelInfo(itemLink)
+    if not itemLevel then
+        -- Fallback: try to get item level from item info
+        local _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, itemLevelFromInfo = GetItemInfo(itemLink)
+        itemLevel = itemLevelFromInfo
+    end
+    
+    if not itemLevel or itemLevel == 0 then
+        return true -- If we can't determine item level, allow it
+    end
+    
+    return itemLevel >= GroupLootHelperDB.settings.minItemLevel
+end
+
 -- Communication functions
 local function SendAddonMessage(message, distribution)
     if not IsInGroup() then return end
@@ -138,10 +170,18 @@ end
 local function BroadcastLootDrop(itemLink)
     if not itemLink or not IsInValidInstance() or not IsInGroup() then return end
     
+    -- Check if item meets item level requirement
+    if not MeetsItemLevelRequirement(itemLink) then
+        local itemLevel = GetDetailedItemLevelInfo(itemLink) or 0
+        print("|cffff9900[Group Loot Helper]|r Item level " .. itemLevel .. " below threshold (" .. GroupLootHelperDB.settings.minItemLevel .. "): " .. itemLink)
+        return
+    end
+    
     local message = "LOOT:" .. itemLink
     SendAddonMessage(message, "GROUP")
     
-    print("|cff00ff00[Group Loot Helper]|r Announced loot: " .. itemLink)
+    local itemLevel = GetDetailedItemLevelInfo(itemLink) or "?"
+    print("|cff00ff00[Group Loot Helper]|r Announced loot (iLvl " .. itemLevel .. "): " .. itemLink)
 end
 
 local function SendInterest(itemLink, senderName)
@@ -225,6 +265,103 @@ local function CreateInterestWindow(itemLink, senderName)
     end)
     
     activeInterestWindows[itemLink] = frame
+    frame:Show()
+end
+
+local function CreateSettingsGUI()
+    if GroupLootHelper.settingsFrame and GroupLootHelper.settingsFrame:IsShown() then
+        GroupLootHelper.settingsFrame:Hide()
+        return
+    end
+    
+    local frame = CreateFrame("Frame", "GLH_SettingsFrame", UIParent, "BasicFrameTemplateWithInset")
+    frame:SetSize(350, 250)
+    frame:SetPoint("CENTER", UIParent, "CENTER")
+    frame:SetFrameStrata("DIALOG")
+    frame:SetToplevel(true)
+    frame:EnableMouse(true)
+    frame:SetMovable(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    
+    -- Title
+    frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.title:SetPoint("TOP", frame, "TOP", 0, -8)
+    frame.title:SetText("Group Loot Helper Settings")
+    
+    -- Enable Open World checkbox
+    frame.openWorldCheck = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+    frame.openWorldCheck:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -40)
+    frame.openWorldCheck:SetChecked(GroupLootHelperDB.settings.enableOpenWorld)
+    frame.openWorldCheck.text = frame.openWorldCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    frame.openWorldCheck.text:SetPoint("LEFT", frame.openWorldCheck, "RIGHT", 5, 0)
+    frame.openWorldCheck.text:SetText("Enable in Open World")
+    
+    -- Instance Only checkbox
+    frame.instanceOnlyCheck = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+    frame.instanceOnlyCheck:SetPoint("TOPLEFT", frame.openWorldCheck, "BOTTOMLEFT", 0, -10)
+    frame.instanceOnlyCheck:SetChecked(GroupLootHelperDB.settings.instanceOnly)
+    frame.instanceOnlyCheck.text = frame.instanceOnlyCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    frame.instanceOnlyCheck.text:SetPoint("LEFT", frame.instanceOnlyCheck, "RIGHT", 5, 0)
+    frame.instanceOnlyCheck.text:SetText("Instance Only Mode")
+    
+    -- Min Item Level setting
+    frame.itemLevelLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    frame.itemLevelLabel:SetPoint("TOPLEFT", frame.instanceOnlyCheck, "BOTTOMLEFT", 5, -20)
+    frame.itemLevelLabel:SetText("Minimum Item Level:")
+    
+    frame.itemLevelEditBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+    frame.itemLevelEditBox:SetSize(80, 25)
+    frame.itemLevelEditBox:SetPoint("LEFT", frame.itemLevelLabel, "RIGHT", 10, 0)
+    frame.itemLevelEditBox:SetText(tostring(GroupLootHelperDB.settings.minItemLevel))
+    frame.itemLevelEditBox:SetAutoFocus(false)
+    
+    -- Window Timeout setting
+    frame.timeoutLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    frame.timeoutLabel:SetPoint("TOPLEFT", frame.itemLevelLabel, "BOTTOMLEFT", 0, -30)
+    frame.timeoutLabel:SetText("Window Timeout (seconds):")
+    
+    frame.timeoutEditBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+    frame.timeoutEditBox:SetSize(80, 25)
+    frame.timeoutEditBox:SetPoint("LEFT", frame.timeoutLabel, "RIGHT", 10, 0)
+    frame.timeoutEditBox:SetText(tostring(GroupLootHelperDB.settings.windowTimeout))
+    frame.timeoutEditBox:SetAutoFocus(false)
+    
+    -- Save button
+    frame.saveButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    frame.saveButton:SetSize(80, 25)
+    frame.saveButton:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 15)
+    frame.saveButton:SetText("Save")
+    frame.saveButton:SetScript("OnClick", function()
+        -- Save settings
+        GroupLootHelperDB.settings.enableOpenWorld = frame.openWorldCheck:GetChecked()
+        GroupLootHelperDB.settings.instanceOnly = frame.instanceOnlyCheck:GetChecked()
+        
+        local itemLevel = tonumber(frame.itemLevelEditBox:GetText())
+        if itemLevel and itemLevel >= 0 then
+            GroupLootHelperDB.settings.minItemLevel = itemLevel
+        end
+        
+        local timeout = tonumber(frame.timeoutEditBox:GetText())
+        if timeout and timeout > 0 then
+            GroupLootHelperDB.settings.windowTimeout = timeout
+        end
+        
+        print("|cff00ff00[Group Loot Helper]|r Settings saved!")
+        frame:Hide()
+    end)
+    
+    -- Cancel button
+    frame.cancelButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    frame.cancelButton:SetSize(80, 25)
+    frame.cancelButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 15)
+    frame.cancelButton:SetText("Cancel")
+    frame.cancelButton:SetScript("OnClick", function()
+        frame:Hide()
+    end)
+    
+    GroupLootHelper.settingsFrame = frame
     frame:Show()
 end
 
@@ -348,7 +485,7 @@ local function OnChatMsgAddon(self, event, prefix, message, distribution, sender
     
     if command == "LOOT" then
         local itemLink = data
-        if IsItemTradeable(itemLink) and CanUseItem(itemLink) then
+        if IsItemTradeable(itemLink) and CanUseItem(itemLink) and MeetsItemLevelRequirement(itemLink) then
             CreateInterestWindow(itemLink, sender)
         end
     elseif command == "INTEREST" then
@@ -409,16 +546,56 @@ end
 
 SLASH_GLH1 = "/glh"
 SlashCmdList["GLH"] = function(msg)
-    if msg == "interests" or msg == "" then
+    local args = {}
+    for word in msg:gmatch("%S+") do
+        table.insert(args, word)
+    end
+    
+    local command = args[1] or ""
+    
+    if command == "interests" or command == "" then
         CreateInterestListGUI()
-    elseif msg == "clear" then
+    elseif command == "clear" then
         pendingInterests = {}
         print("|cff00ff00[Group Loot Helper]|r Interest list cleared.")
         GroupLootHelper:UpdateInterestList()
+    elseif command == "settings" or command == "config" then
+        CreateSettingsGUI()
+    elseif command == "itemlevel" or command == "ilvl" then
+        local level = tonumber(args[2])
+        if level and level >= 0 then
+            GroupLootHelperDB.settings.minItemLevel = level
+            print("|cff00ff00[Group Loot Helper]|r Minimum item level set to: " .. level)
+        else
+            print("|cff00ff00[Group Loot Helper]|r Current minimum item level: " .. GroupLootHelperDB.settings.minItemLevel)
+            print("Usage: /glh itemlevel [number]")
+        end
+    elseif command == "openworld" then
+        GroupLootHelperDB.settings.enableOpenWorld = not GroupLootHelperDB.settings.enableOpenWorld
+        local status = GroupLootHelperDB.settings.enableOpenWorld and "enabled" or "disabled"
+        print("|cff00ff00[Group Loot Helper]|r Open world mode " .. status)
+    elseif command == "instanceonly" then
+        GroupLootHelperDB.settings.instanceOnly = not GroupLootHelperDB.settings.instanceOnly
+        local status = GroupLootHelperDB.settings.instanceOnly and "enabled" or "disabled"
+        print("|cff00ff00[Group Loot Helper]|r Instance only mode " .. status)
+    elseif command == "status" then
+        print("|cff00ff00[Group Loot Helper]|r Current Settings:")
+        print("  Minimum Item Level: " .. GroupLootHelperDB.settings.minItemLevel)
+        print("  Open World: " .. (GroupLootHelperDB.settings.enableOpenWorld and "Enabled" or "Disabled"))
+        print("  Instance Only: " .. (GroupLootHelperDB.settings.instanceOnly and "Enabled" or "Disabled"))
+        print("  Window Timeout: " .. GroupLootHelperDB.settings.windowTimeout .. " seconds")
+        local inInstance, instanceType = IsInInstance()
+        print("  Current Location: " .. (inInstance and instanceType or "Open World"))
+        print("  Valid for Loot: " .. (IsInValidInstance() and "Yes" or "No"))
     else
         print("|cff00ff00[Group Loot Helper]|r Commands:")
         print("  /glh or /glh interests - Show interest overview")
+        print("  /glh settings - Open settings GUI")
         print("  /glh clear - Clear interest list")
+        print("  /glh itemlevel [number] - Set/show minimum item level")
+        print("  /glh openworld - Toggle open world mode")
+        print("  /glh instanceonly - Toggle instance only mode")
+        print("  /glh status - Show current settings and status")
         print("  /sendloot [itemID] - Test loot announcement")
     end
 end

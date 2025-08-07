@@ -6,7 +6,9 @@ Ein World of Warcraft Addon für automatische Loot-Ankündigung und Interessensv
 
 ### Automatische Loot-Erkennung
 - Erkennt automatisch handelbare Items, die gedroppt werden
-- Funktioniert nur in aktiven Dungeon-/Raid-Instanzen
+- **NEU**: Funktioniert auch in der offenen Welt (konfigurierbar)
+- **NEU**: Item Level Filter - nur Items über einem bestimmten Level (Standard: 620)
+- Funktioniert in Dungeons, Raids und optional in der offenen Welt
 - Alle Gruppenmitglieder müssen das Addon installiert haben
 
 ### Kommunikation
@@ -49,16 +51,28 @@ Ein World of Warcraft Addon für automatische Loot-Ankündigung und Interessensv
 
 ## 📋 Befehle
 
+### Hauptbefehle
+- `/glh` oder `/glh interests` - Öffnet die Interessen-Übersicht
+- `/glh settings` - Öffnet das Einstellungsmenü
+- `/glh clear` - Löscht die aktuelle Interessenliste
+- `/glh status` - Zeigt aktuelle Einstellungen und Status
+
+### Einstellungsbefehle
+- `/glh itemlevel [zahl]` - Setzt/zeigt minimales Item Level
+- `/glh openworld` - Schaltet Open World Modus um
+- `/glh instanceonly` - Schaltet Nur-Instanz Modus um
+
 ### Test-Befehle
 - `/sendloot [itemID]` - Simuliert einen Item-Drop für Tests
-- `/glh` oder `/glhinterest` - Öffnet die Interessen-Übersicht
-- `/glh clear` - Löscht die aktuelle Interessenliste
 
 ### Beispiele
 ```
-/sendloot 34334    # Testet mit "Thori'dal, the Stars' Fury"
-/glh               # Zeigt Interessen-GUI
-/glh clear         # Löscht alle Interessen
+/sendloot 34334         # Testet mit "Thori'dal, the Stars' Fury"
+/glh                    # Zeigt Interessen-GUI
+/glh settings           # Öffnet Einstellungen
+/glh itemlevel 630      # Setzt minimales Item Level auf 630
+/glh openworld          # Schaltet Open World Modus um
+/glh status             # Zeigt aktuelle Einstellungen
 ```
 
 ## 🔧 Technische Details
@@ -68,10 +82,19 @@ Ein World of Warcraft Addon für automatische Loot-Ankündigung und Interessensv
 - **Interface**: 110200
 - **Saved Variables**: `GroupLootHelperDB`
 
-### Instanz-Validierung
-Das Addon ist nur aktiv in:
-- Dungeons (`instanceType == "party"`)
-- Raids (`instanceType == "raid"`)
+### Aktivierungslogik
+**Standardmodus (Open World aktiviert):**
+- Funktioniert überall: Dungeons, Raids und offene Welt
+- Filtert Items nach konfigurierbarem Item Level
+
+**Nur-Instanz Modus:**
+- Nur aktiv in Dungeons (`instanceType == "party"`)
+- Nur aktiv in Raids (`instanceType == "raid"`)
+
+**Konfigurierbare Einstellungen:**
+- `enableOpenWorld` - Erlaubt Funktionalität in der offenen Welt
+- `instanceOnly` - Beschränkt auf Instanzen (überschreibt Open World)
+- `minItemLevel` - Minimales Item Level für Ankündigungen (Standard: 620)
 
 ### Klassen-Kompatibilität
 
@@ -123,6 +146,14 @@ Das Addon ist nur aktiv in:
 - Nur Items für deine Klasse werden angezeigt
 
 ## 📝 Changelog
+
+### Version 1.1.0
+- **NEU**: Open World Unterstützung für handelbare Items
+- **NEU**: Item Level Filter (konfigurierbar, Standard: 620)
+- **NEU**: Einstellungs-GUI mit `/glh settings`
+- **NEU**: Erweiterte Slash-Befehle für Konfiguration
+- **NEU**: Status-Anzeige mit aktuellen Einstellungen
+- Verbesserte Chat-Ausgaben mit Item Level Anzeige
 
 ### Version 1.0.0
 - Initiale Veröffentlichung

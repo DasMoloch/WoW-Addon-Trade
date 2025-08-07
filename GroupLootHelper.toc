@@ -2,7 +2,7 @@
 ## Title: Group Loot Helper
 ## Notes: Automatically announces tradeable loot drops and manages interest from group members
 ## Author: YourName
-## Version: 1.0.0
+## Version: 1.1.0
 ## SavedVariables: GroupLootHelperDB
 
 GroupLootHelper.lua
